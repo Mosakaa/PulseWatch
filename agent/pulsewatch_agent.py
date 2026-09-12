@@ -13,6 +13,9 @@ def collect_snapshot() -> dict[str, object]:
     memory = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
     network = psutil.net_io_counters()
+    expected_services = [name.strip() for name in os.getenv("PULSEWATCH_SERVICES", "").split(",") if name.strip()]
+    running_processes = {process.info["name"].lower() for process in psutil.process_iter(["name"]) if process.info["name"]}
+    services = {name: "running" if name.lower() in running_processes else "stopped" for name in expected_services}
     return {
         "hostname": socket.gethostname(),
         "collected_at": datetime.now(timezone.utc).isoformat(),
@@ -22,6 +25,7 @@ def collect_snapshot() -> dict[str, object]:
         "network_bytes_sent": network.bytes_sent,
         "network_bytes_received": network.bytes_recv,
         "uptime_seconds": int(datetime.now().timestamp() - psutil.boot_time()),
+        "services": services,
     }
 
 

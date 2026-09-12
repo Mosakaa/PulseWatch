@@ -122,3 +122,21 @@ def test_user_can_acknowledge_an_active_alert() -> None:
     assert acknowledged.status_code == 200
     assert acknowledged.json()["state"] == "acknowledged"
     assert acknowledged.json()["acknowledged_at"]
+
+
+def test_service_down_creates_and_resolves_an_alert() -> None:
+    credentials = {"email": "operator@example.com", "password": "strong-password"}
+    with TestClient(app) as client:
+        access_token = client.post("/auth/register", json=credentials).json()["access_token"]
+        authorization = {"Authorization": f"Bearer {access_token}"}
+        enrollment = client.post("/machines", json={"name": "demo-node", "hostname": "demo-node.local"}, headers=authorization).json()
+        client.post(f"/machines/{enrollment['id']}/services", json={"service_name": "nginx", "severity": "critical"}, headers=authorization)
+        agent_headers = {"X-Machine-ID": enrollment["id"], "X-Agent-Token": enrollment["agent_token"]}
+        client.post("/agent/telemetry", json={"cpu_percent": 10, "memory_percent": 20, "disk_percent": 30, "uptime_seconds": 100, "services": {"nginx": "stopped"}}, headers=agent_headers)
+        active_alert = client.get("/alerts", headers=authorization).json()[0]
+        client.post("/agent/telemetry", json={"cpu_percent": 10, "memory_percent": 20, "disk_percent": 30, "uptime_seconds": 101, "services": {"nginx": "running"}}, headers=agent_headers)
+        resolved_alert = client.get("/alerts", headers=authorization).json()[0]
+
+    assert active_alert["kind"] == "service"
+    assert active_alert["state"] == "active"
+    assert resolved_alert["state"] == "resolved"

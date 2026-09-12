@@ -8,11 +8,12 @@ from sqlalchemy import desc, select, text
 from sqlalchemy.orm import Session
 
 from .database import Base, SessionLocal, engine, get_session
-from .models import Alert, AlertRule, Machine, Telemetry, User
+from .models import Alert, AlertRule, Machine, ServiceCheck, Telemetry, User
 from .schemas import (AlertResponse, AlertRuleResponse, AlertRuleUpdate, AuthResponse,
-                      Credentials, MachineCreate, MachineEnrollment, MachineResponse, TelemetryIn)
+                      Credentials, MachineCreate, MachineEnrollment, MachineResponse,
+                      ServiceCheckCreate, ServiceCheckResponse, TelemetryIn)
 from .security import create_access_token, decode_access_token, hash_password, new_agent_token, verify_password
-from .services.alert_engine import evaluate_threshold_rules
+from .services.alert_engine import evaluate_service_checks, evaluate_threshold_rules
 from .services.machine_status import refresh_machine_statuses
 from .realtime import manager
 
@@ -128,6 +129,7 @@ async def ingest_telemetry(payload: TelemetryIn, x_machine_id: str = Header(defa
     machine.status = "online"
     session.flush()
     alerts = evaluate_threshold_rules(session, machine, telemetry)
+    alerts.extend(evaluate_service_checks(session, machine, telemetry))
     session.flush()
     session.commit()
     await manager.broadcast(machine.owner_id, {"type": "telemetry.received", "machine_id": machine.id})
@@ -172,6 +174,29 @@ def telemetry_history(machine_id: str, limit: int = 60, user: User = Depends(req
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
     rows = session.scalars(select(Telemetry).where(Telemetry.machine_id == machine.id).order_by(desc(Telemetry.collected_at)).limit(min(limit, 500))).all()
     return [{"collected_at": row.collected_at.isoformat(), "cpu_percent": row.cpu_percent, "memory_percent": row.memory_percent, "disk_percent": row.disk_percent, "network_bytes_sent": row.network_bytes_sent, "network_bytes_received": row.network_bytes_received, "uptime_seconds": row.uptime_seconds} for row in reversed(rows)]
+
+
+@app.get("/machines/{machine_id}/services", response_model=list[ServiceCheckResponse], tags=["services"])
+def list_service_checks(machine_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[ServiceCheck]:
+    machine = session.get(Machine, machine_id)
+    if machine is None or machine.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
+    return session.scalars(select(ServiceCheck).where(ServiceCheck.machine_id == machine.id).order_by(ServiceCheck.service_name)).all()
+
+
+@app.post("/machines/{machine_id}/services", response_model=ServiceCheckResponse, status_code=status.HTTP_201_CREATED, tags=["services"])
+def create_service_check(machine_id: str, payload: ServiceCheckCreate, user: User = Depends(require_user), session: Session = Depends(get_session)) -> ServiceCheck:
+    machine = session.get(Machine, machine_id)
+    if machine is None or machine.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
+    existing = session.scalar(select(ServiceCheck).where(ServiceCheck.machine_id == machine.id, ServiceCheck.service_name == payload.service_name))
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Service is already monitored")
+    check = ServiceCheck(machine_id=machine.id, service_name=payload.service_name, severity=payload.severity)
+    session.add(check)
+    session.commit()
+    session.refresh(check)
+    return check
 
 
 @app.get("/machines/{machine_id}/rules", response_model=list[AlertRuleResponse], tags=["alerts"])

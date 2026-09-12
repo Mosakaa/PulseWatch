@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -46,6 +46,17 @@ class Telemetry(Base):
     network_bytes_sent: Mapped[int] = mapped_column(Integer, default=0)
     network_bytes_received: Mapped[int] = mapped_column(Integer, default=0)
     uptime_seconds: Mapped[int] = mapped_column(Integer)
+    services: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ServiceCheck(Base):
+    __tablename__ = "service_checks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    machine_id: Mapped[str] = mapped_column(ForeignKey("machines.id"), index=True)
+    service_name: Mapped[str] = mapped_column(String(100))
+    severity: Mapped[str] = mapped_column(String(20), default="critical")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class AlertRule(Base):
@@ -65,6 +76,7 @@ class Alert(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     machine_id: Mapped[str] = mapped_column(ForeignKey("machines.id"), index=True)
     rule_id: Mapped[int] = mapped_column(ForeignKey("alert_rules.id"), nullable=True)
+    service_check_id: Mapped[int] = mapped_column(ForeignKey("service_checks.id"), nullable=True)
     kind: Mapped[str] = mapped_column(String(50))
     state: Mapped[str] = mapped_column(String(20), default="active")
     severity: Mapped[str] = mapped_column(String(20))

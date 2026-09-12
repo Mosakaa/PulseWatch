@@ -36,6 +36,20 @@ class TelemetryIn(BaseModel):
     network_bytes_sent: int = Field(ge=0, default=0)
     network_bytes_received: int = Field(ge=0, default=0)
     uptime_seconds: int = Field(ge=0)
+    services: dict[str, str] = Field(default_factory=dict)
+
+
+class ServiceCheckCreate(BaseModel):
+    service_name: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_.-]+$")
+    severity: str = Field(default="critical", pattern="^(info|warning|critical)$")
+
+
+class ServiceCheckResponse(BaseModel):
+    id: int
+    machine_id: str
+    service_name: str
+    severity: str
+    enabled: bool
 
 
 class AlertRuleUpdate(BaseModel):
