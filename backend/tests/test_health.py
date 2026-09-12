@@ -81,6 +81,28 @@ def test_threshold_alert_is_created_and_resolved() -> None:
     assert resolved_alert["state"] == "resolved"
 
 
+def test_threshold_alert_waits_for_its_configured_duration() -> None:
+    credentials = {"email": "operator@example.com", "password": "strong-password"}
+    with TestClient(app) as client:
+        access_token = client.post("/auth/register", json=credentials).json()["access_token"]
+        authorization = {"Authorization": f"Bearer {access_token}"}
+        enrollment = client.post("/machines", json={"name": "demo-node", "hostname": "demo-node.local"}, headers=authorization).json()
+        cpu_rule = next(rule for rule in client.get(f"/machines/{enrollment['id']}/rules", headers=authorization).json() if rule["metric"] == "cpu_percent")
+        client.put(f"/alert-rules/{cpu_rule['id']}", json={"threshold": 90, "duration_seconds": 300, "severity": "warning", "enabled": True}, headers=authorization)
+        agent_headers = {"X-Machine-ID": enrollment["id"], "X-Agent-Token": enrollment["agent_token"]}
+        client.post("/agent/telemetry", json={"cpu_percent": 95, "memory_percent": 20, "disk_percent": 20, "uptime_seconds": 100}, headers=agent_headers)
+        pending_alert = client.get("/alerts", headers=authorization).json()[0]
+        with SessionLocal() as session:
+            alert = session.get(Alert, pending_alert["id"])
+            alert.created_at = datetime.now(timezone.utc) - timedelta(seconds=301)
+            session.commit()
+        client.post("/agent/telemetry", json={"cpu_percent": 95, "memory_percent": 20, "disk_percent": 20, "uptime_seconds": 101}, headers=agent_headers)
+        active_alert = client.get("/alerts", headers=authorization).json()[0]
+
+    assert pending_alert["state"] == "pending"
+    assert active_alert["state"] == "active"
+
+
 def test_machine_becomes_offline_when_heartbeat_expires() -> None:
     credentials = {"email": "operator@example.com", "password": "strong-password"}
     with TestClient(app) as client:

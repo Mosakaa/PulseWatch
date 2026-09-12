@@ -54,6 +54,7 @@ class ServiceCheckResponse(BaseModel):
 
 class AlertRuleUpdate(BaseModel):
     threshold: float = Field(ge=0, le=100)
+    duration_seconds: int = Field(ge=0, le=86400)
     severity: str = Field(pattern="^(info|warning|critical)$")
     enabled: bool
 
@@ -63,6 +64,7 @@ class AlertRuleResponse(BaseModel):
     machine_id: str
     metric: str
     threshold: float
+    duration_seconds: int
     severity: str
     enabled: bool
 
