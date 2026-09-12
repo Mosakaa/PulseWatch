@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import desc, select, text
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,13 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="PulseWatch API", version="0.3.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 async def heartbeat_watcher() -> None:
