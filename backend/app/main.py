@@ -21,7 +21,6 @@ from .services.notifications import notify_discord
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
     watcher = asyncio.create_task(heartbeat_watcher())
     yield
     watcher.cancel()
