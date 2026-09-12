@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -31,3 +31,17 @@ class Machine(Base):
     agent_token_hash: Mapped[str] = mapped_column(String(255))
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Telemetry(Base):
+    __tablename__ = "telemetry"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    machine_id: Mapped[str] = mapped_column(ForeignKey("machines.id"), index=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    cpu_percent: Mapped[float] = mapped_column(Float)
+    memory_percent: Mapped[float] = mapped_column(Float)
+    disk_percent: Mapped[float] = mapped_column(Float)
+    network_bytes_sent: Mapped[int] = mapped_column(Integer, default=0)
+    network_bytes_received: Mapped[int] = mapped_column(Integer, default=0)
+    uptime_seconds: Mapped[int] = mapped_column(Integer)

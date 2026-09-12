@@ -27,6 +27,19 @@ docker compose up --build
 
 The API health check is available at `http://localhost:8000/health` and the dashboard at `http://localhost:5173`.
 
+## Enroll an agent
+
+Register an account and machine through the API docs at `http://localhost:8000/docs`. The enrollment response contains a machine ID and a one-time-displayed agent token. Set them in `agent/.env` using `agent/.env.example` as a guide, then run:
+
+```bash
+cd agent
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+set -a; source .env; set +a
+python pulsewatch_agent.py
+```
+
 To run the API without Docker:
 
 ```bash

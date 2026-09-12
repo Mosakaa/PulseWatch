@@ -27,3 +27,12 @@ class MachineResponse(BaseModel):
 
 class MachineEnrollment(MachineResponse):
     agent_token: str
+
+
+class TelemetryIn(BaseModel):
+    cpu_percent: float = Field(ge=0, le=100)
+    memory_percent: float = Field(ge=0, le=100)
+    disk_percent: float = Field(ge=0, le=100)
+    network_bytes_sent: int = Field(ge=0, default=0)
+    network_bytes_received: int = Field(ge=0, default=0)
+    uptime_seconds: int = Field(ge=0)

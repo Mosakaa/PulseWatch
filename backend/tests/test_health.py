@@ -44,3 +44,15 @@ def test_authenticated_user_can_enroll_a_machine() -> None:
     assert response.status_code == 201
     assert response.json()["agent_token"]
     assert machines.json()[0]["hostname"] == "demo-node.local"
+
+
+def test_agent_can_submit_telemetry_for_an_enrolled_machine() -> None:
+    credentials = {"email": "operator@example.com", "password": "strong-password"}
+    with TestClient(app) as client:
+        access_token = client.post("/auth/register", json=credentials).json()["access_token"]
+        enrollment = client.post("/machines", json={"name": "demo-node", "hostname": "demo-node.local"}, headers={"Authorization": f"Bearer {access_token}"}).json()
+        response = client.post("/agent/telemetry", json={"cpu_percent": 42, "memory_percent": 58, "disk_percent": 20, "network_bytes_sent": 10, "network_bytes_received": 11, "uptime_seconds": 100}, headers={"X-Machine-ID": enrollment["id"], "X-Agent-Token": enrollment["agent_token"]})
+        history = client.get(f"/machines/{enrollment['id']}/telemetry", headers={"Authorization": f"Bearer {access_token}"})
+
+    assert response.status_code == 202
+    assert history.json()[0]["cpu_percent"] == 42
