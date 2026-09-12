@@ -16,6 +16,7 @@ from .security import create_access_token, decode_access_token, hash_password, n
 from .services.alert_engine import evaluate_service_checks, evaluate_threshold_rules
 from .services.machine_status import refresh_machine_statuses
 from .realtime import manager
+from .services.notifications import notify_discord
 
 
 @asynccontextmanager
@@ -47,6 +48,7 @@ async def heartbeat_watcher() -> None:
                 machine = session.get(Machine, alert.machine_id)
                 if machine is not None:
                     await manager.broadcast(machine.owner_id, {"type": "alert.created", "machine_id": machine.id, "alert_id": alert.id})
+                    await notify_discord(alert, machine)
 
 
 def require_user(authorization: str = Header(default=""), session: Session = Depends(get_session)) -> User:
@@ -135,6 +137,7 @@ async def ingest_telemetry(payload: TelemetryIn, x_machine_id: str = Header(defa
     await manager.broadcast(machine.owner_id, {"type": "telemetry.received", "machine_id": machine.id})
     for alert in alerts:
         await manager.broadcast(machine.owner_id, {"type": "alert.created", "machine_id": machine.id, "alert_id": alert.id})
+        await notify_discord(alert, machine)
     return {"status": "accepted"}
 
 

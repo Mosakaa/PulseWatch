@@ -40,6 +40,10 @@ set -a; source .env; set +a
 python pulsewatch_agent.py
 ```
 
+## Discord notifications
+
+Set `DISCORD_WEBHOOK_URL` to a Discord channel webhook before starting the API or Docker Compose. PulseWatch delivers new threshold, service-down, and heartbeat incidents to that channel. Notification delivery is best-effort and never prevents the agent telemetry path from succeeding.
+
 To run the API without Docker:
 
 ```bash

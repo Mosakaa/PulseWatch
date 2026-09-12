@@ -5,8 +5,9 @@ from fastapi.testclient import TestClient
 
 from app.database import Base, SessionLocal, engine
 from app.main import app
-from app.models import Machine
+from app.models import Alert, Machine
 from app.services.machine_status import refresh_machine_statuses
+from app.services.notifications import discord_payload
 
 
 @pytest.fixture(autouse=True)
@@ -140,3 +141,13 @@ def test_service_down_creates_and_resolves_an_alert() -> None:
     assert active_alert["kind"] == "service"
     assert active_alert["state"] == "active"
     assert resolved_alert["state"] == "resolved"
+
+
+def test_discord_payload_contains_alert_context() -> None:
+    machine = Machine(id="machine-1", owner_id=1, name="api-prod-01", hostname="api-prod-01.local", agent_token_hash="hash")
+    alert = Alert(id=7, machine_id="machine-1", kind="service", state="active", severity="critical", message="api-prod-01: service nginx is stopped")
+
+    payload = discord_payload(alert, machine)
+
+    assert payload["username"] == "PulseWatch"
+    assert payload["embeds"][0]["fields"][0]["value"] == "api-prod-01"
