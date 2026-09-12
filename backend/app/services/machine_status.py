@@ -21,7 +21,7 @@ def refresh_machine_statuses(session: Session, reference_time: datetime | None =
         status = "online" if age_seconds < DEGRADED_AFTER_SECONDS else "degraded" if age_seconds < OFFLINE_AFTER_SECONDS else "offline"
         machine.status = status
         if status == "offline":
-            active_alert = session.scalar(select(Alert).where(Alert.machine_id == machine.id, Alert.kind == "heartbeat", Alert.state == "active"))
+            active_alert = session.scalar(select(Alert).where(Alert.machine_id == machine.id, Alert.kind == "heartbeat", Alert.state.in_(("active", "acknowledged"))))
             if active_alert is None:
                 alert = Alert(machine_id=machine.id, kind="heartbeat", severity="critical", message=f"{machine.name} has not sent a heartbeat for {int(age_seconds)} seconds")
                 session.add(alert)

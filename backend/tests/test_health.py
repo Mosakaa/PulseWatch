@@ -99,6 +99,27 @@ def test_machine_becomes_offline_when_heartbeat_expires() -> None:
     assert alerts[0]["kind"] == "heartbeat"
 
 
+def test_heartbeat_recovery_resolves_an_acknowledged_offline_alert() -> None:
+    credentials = {"email": "operator@example.com", "password": "strong-password"}
+    with TestClient(app) as client:
+        access_token = client.post("/auth/register", json=credentials).json()["access_token"]
+        authorization = {"Authorization": f"Bearer {access_token}"}
+        enrollment = client.post("/machines", json={"name": "demo-node", "hostname": "demo-node.local"}, headers=authorization).json()
+        agent_headers = {"X-Machine-ID": enrollment["id"], "X-Agent-Token": enrollment["agent_token"]}
+        client.post("/agent/heartbeat", headers=agent_headers)
+        with SessionLocal() as session:
+            machine = session.get(Machine, enrollment["id"])
+            machine.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=61)
+            refresh_machine_statuses(session)
+            session.commit()
+        alert_id = client.get("/alerts", headers=authorization).json()[0]["id"]
+        client.post(f"/alerts/{alert_id}/acknowledge", headers=authorization)
+        client.post("/agent/heartbeat", headers=agent_headers)
+        alert = client.get("/alerts", headers=authorization).json()[0]
+
+    assert alert["state"] == "resolved"
+
+
 def test_dashboard_receives_telemetry_events_over_websocket() -> None:
     credentials = {"email": "operator@example.com", "password": "strong-password"}
     with TestClient(app) as client:

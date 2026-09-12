@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -7,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import desc, select, text
 from sqlalchemy.orm import Session
 
-from .database import Base, SessionLocal, engine, get_session
+from .database import SessionLocal, engine, get_session
 from .models import Alert, AlertRule, Machine, ServiceCheck, Telemetry, User
 from .schemas import (AlertResponse, AlertRuleResponse, AlertRuleUpdate, AuthResponse,
                       Credentials, MachineCreate, MachineEnrollment, MachineResponse,
@@ -16,7 +17,9 @@ from .security import create_access_token, decode_access_token, hash_password, n
 from .services.alert_engine import evaluate_service_checks, evaluate_threshold_rules
 from .services.machine_status import refresh_machine_statuses
 from .realtime import manager
-from .services.notifications import notify_discord
+from .services.notifications import discord_payload, notify_discord
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -39,15 +42,17 @@ app.add_middleware(
 async def heartbeat_watcher() -> None:
     while True:
         await asyncio.sleep(15)
-        with SessionLocal() as session:
-            alerts = refresh_machine_statuses(session)
-            session.flush()
-            session.commit()
-            for alert in alerts:
-                machine = session.get(Machine, alert.machine_id)
-                if machine is not None:
-                    await manager.broadcast(machine.owner_id, {"type": "alert.created", "machine_id": machine.id, "alert_id": alert.id})
-                    await notify_discord(alert, machine)
+        try:
+            with SessionLocal() as session:
+                alerts = refresh_machine_statuses(session)
+                session.flush()
+                session.commit()
+                for alert in alerts:
+                    machine = session.get(Machine, alert.machine_id)
+                    if machine is not None:
+                        await publish_alert(machine, alert)
+        except Exception:
+            logger.exception("heartbeat_watcher_failed")
 
 
 def require_user(authorization: str = Header(default=""), session: Session = Depends(get_session)) -> User:
@@ -65,6 +70,34 @@ def require_agent(x_machine_id: str, x_agent_token: str, session: Session) -> Ma
     if machine is None or not x_agent_token or not verify_password(x_agent_token, machine.agent_token_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent credentials")
     return machine
+
+
+def require_owned_machine(machine_id: str, user: User, session: Session) -> Machine:
+    machine = session.get(Machine, machine_id)
+    if machine is None or machine.owner_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
+    return machine
+
+
+def alert_response(alert: Alert, machine_name: str) -> AlertResponse:
+    return AlertResponse(
+        id=alert.id,
+        machine_id=alert.machine_id,
+        machine_name=machine_name,
+        kind=alert.kind,
+        state=alert.state,
+        severity=alert.severity,
+        message=alert.message,
+        value=alert.value,
+        created_at=alert.created_at.isoformat(),
+        acknowledged_at=alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
+        resolved_at=alert.resolved_at.isoformat() if alert.resolved_at else None,
+    )
+
+
+async def publish_alert(machine: Machine, alert: Alert) -> None:
+    await manager.broadcast(machine.owner_id, {"type": "alert.created", "machine_id": machine.id, "alert_id": alert.id})
+    asyncio.create_task(notify_discord(discord_payload(alert, machine), alert.id, machine.id))
 
 
 @app.get("/health", tags=["system"])
@@ -135,8 +168,7 @@ async def ingest_telemetry(payload: TelemetryIn, x_machine_id: str = Header(defa
     session.commit()
     await manager.broadcast(machine.owner_id, {"type": "telemetry.received", "machine_id": machine.id})
     for alert in alerts:
-        await manager.broadcast(machine.owner_id, {"type": "alert.created", "machine_id": machine.id, "alert_id": alert.id})
-        await notify_discord(alert, machine)
+        await publish_alert(machine, alert)
     return {"status": "accepted"}
 
 
@@ -145,7 +177,7 @@ async def receive_heartbeat(x_machine_id: str = Header(default=""), x_agent_toke
     machine = require_agent(x_machine_id, x_agent_token, session)
     machine.last_heartbeat_at = datetime.now(timezone.utc)
     machine.status = "online"
-    active_alert = session.scalar(select(Alert).where(Alert.machine_id == machine.id, Alert.kind == "heartbeat", Alert.state == "active"))
+    active_alert = session.scalar(select(Alert).where(Alert.machine_id == machine.id, Alert.kind == "heartbeat", Alert.state.in_(("active", "acknowledged"))))
     if active_alert is not None:
         active_alert.state = "resolved"
         active_alert.resolved_at = datetime.now(timezone.utc)
@@ -170,27 +202,21 @@ async def dashboard_events(websocket: WebSocket, token: str = Query()):
 
 
 @app.get("/machines/{machine_id}/telemetry", tags=["telemetry"])
-def telemetry_history(machine_id: str, limit: int = 60, user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[dict]:
-    machine = session.get(Machine, machine_id)
-    if machine is None or machine.owner_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
-    rows = session.scalars(select(Telemetry).where(Telemetry.machine_id == machine.id).order_by(desc(Telemetry.collected_at)).limit(min(limit, 500))).all()
+def telemetry_history(machine_id: str, limit: int = Query(default=60, ge=1, le=500), user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[dict]:
+    machine = require_owned_machine(machine_id, user, session)
+    rows = session.scalars(select(Telemetry).where(Telemetry.machine_id == machine.id).order_by(desc(Telemetry.collected_at)).limit(limit)).all()
     return [{"collected_at": row.collected_at.isoformat(), "cpu_percent": row.cpu_percent, "memory_percent": row.memory_percent, "disk_percent": row.disk_percent, "network_bytes_sent": row.network_bytes_sent, "network_bytes_received": row.network_bytes_received, "uptime_seconds": row.uptime_seconds} for row in reversed(rows)]
 
 
 @app.get("/machines/{machine_id}/services", response_model=list[ServiceCheckResponse], tags=["services"])
 def list_service_checks(machine_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[ServiceCheck]:
-    machine = session.get(Machine, machine_id)
-    if machine is None or machine.owner_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
+    machine = require_owned_machine(machine_id, user, session)
     return session.scalars(select(ServiceCheck).where(ServiceCheck.machine_id == machine.id).order_by(ServiceCheck.service_name)).all()
 
 
 @app.post("/machines/{machine_id}/services", response_model=ServiceCheckResponse, status_code=status.HTTP_201_CREATED, tags=["services"])
 def create_service_check(machine_id: str, payload: ServiceCheckCreate, user: User = Depends(require_user), session: Session = Depends(get_session)) -> ServiceCheck:
-    machine = session.get(Machine, machine_id)
-    if machine is None or machine.owner_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
+    machine = require_owned_machine(machine_id, user, session)
     existing = session.scalar(select(ServiceCheck).where(ServiceCheck.machine_id == machine.id, ServiceCheck.service_name == payload.service_name))
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Service is already monitored")
@@ -203,9 +229,7 @@ def create_service_check(machine_id: str, payload: ServiceCheckCreate, user: Use
 
 @app.get("/machines/{machine_id}/rules", response_model=list[AlertRuleResponse], tags=["alerts"])
 def list_alert_rules(machine_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[AlertRule]:
-    machine = session.get(Machine, machine_id)
-    if machine is None or machine.owner_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Machine not found")
+    machine = require_owned_machine(machine_id, user, session)
     return session.scalars(select(AlertRule).where(AlertRule.machine_id == machine.id)).all()
 
 
@@ -214,9 +238,7 @@ def update_alert_rule(rule_id: int, payload: AlertRuleUpdate, user: User = Depen
     rule = session.get(AlertRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert rule not found")
-    machine = session.get(Machine, rule.machine_id)
-    if machine is None or machine.owner_id != user.id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert rule not found")
+    require_owned_machine(rule.machine_id, user, session)
     rule.threshold = payload.threshold
     rule.severity = payload.severity
     rule.enabled = payload.enabled
@@ -227,7 +249,7 @@ def update_alert_rule(rule_id: int, payload: AlertRuleUpdate, user: User = Depen
 @app.get("/alerts", response_model=list[AlertResponse], tags=["alerts"])
 def list_alerts(user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[AlertResponse]:
     rows = session.execute(select(Alert, Machine.name).join(Machine).where(Machine.owner_id == user.id).order_by(desc(Alert.created_at)).limit(100)).all()
-    return [AlertResponse(id=alert.id, machine_id=alert.machine_id, machine_name=name, kind=alert.kind, state=alert.state, severity=alert.severity, message=alert.message, value=alert.value, created_at=alert.created_at.isoformat(), acknowledged_at=alert.acknowledged_at.isoformat() if alert.acknowledged_at else None, resolved_at=alert.resolved_at.isoformat() if alert.resolved_at else None) for alert, name in rows]
+    return [alert_response(alert, name) for alert, name in rows]
 
 
 @app.post("/alerts/{alert_id}/acknowledge", response_model=AlertResponse, tags=["alerts"])
@@ -242,4 +264,4 @@ async def acknowledge_alert(alert_id: int, user: User = Depends(require_user), s
         alert.acknowledged_by_id = user.id
         session.commit()
         await manager.broadcast(user.id, {"type": "alert.acknowledged", "machine_id": alert.machine_id, "alert_id": alert.id})
-    return AlertResponse(id=alert.id, machine_id=alert.machine_id, machine_name=machine_name, kind=alert.kind, state=alert.state, severity=alert.severity, message=alert.message, value=alert.value, created_at=alert.created_at.isoformat(), acknowledged_at=alert.acknowledged_at.isoformat() if alert.acknowledged_at else None, resolved_at=alert.resolved_at.isoformat() if alert.resolved_at else None)
+    return alert_response(alert, machine_name)

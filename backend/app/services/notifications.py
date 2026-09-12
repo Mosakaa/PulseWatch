@@ -25,15 +25,15 @@ def discord_payload(alert: Alert, machine: Machine) -> dict:
     }
 
 
-async def notify_discord(alert: Alert, machine: Machine) -> bool:
+async def notify_discord(payload: dict, alert_id: int, machine_id: str) -> bool:
     if not DISCORD_WEBHOOK_URL:
         return False
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            response = await client.post(DISCORD_WEBHOOK_URL, json=discord_payload(alert, machine))
+            response = await client.post(DISCORD_WEBHOOK_URL, json=payload)
             response.raise_for_status()
     except httpx.HTTPError:
-        logger.warning("discord_notification_failed alert_id=%s machine_id=%s", alert.id, machine.id)
+        logger.warning("discord_notification_failed alert_id=%s machine_id=%s", alert_id, machine_id)
         return False
-    logger.info("discord_notification_sent alert_id=%s machine_id=%s", alert.id, machine.id)
+    logger.info("discord_notification_sent alert_id=%s machine_id=%s", alert_id, machine_id)
     return True
