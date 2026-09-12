@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
@@ -50,3 +51,7 @@ def decode_access_token(token: str) -> int:
         return int(claims["sub"])
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired access token") from error
+
+
+def new_agent_token() -> str:
+    return secrets.token_urlsafe(32)

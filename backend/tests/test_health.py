@@ -32,3 +32,15 @@ def test_user_can_register_and_log_in() -> None:
     assert registration.json()["token_type"] == "bearer"
     assert login.status_code == 200
     assert login.json()["access_token"]
+
+
+def test_authenticated_user_can_enroll_a_machine() -> None:
+    credentials = {"email": "operator@example.com", "password": "strong-password"}
+    with TestClient(app) as client:
+        token = client.post("/auth/register", json=credentials).json()["access_token"]
+        response = client.post("/machines", json={"name": "demo-node", "hostname": "demo-node.local"}, headers={"Authorization": f"Bearer {token}"})
+        machines = client.get("/machines", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 201
+    assert response.json()["agent_token"]
+    assert machines.json()[0]["hostname"] == "demo-node.local"
