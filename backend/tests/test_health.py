@@ -1,8 +1,12 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app.database import Base, engine
+from app.database import Base, SessionLocal, engine
 from app.main import app
+from app.models import Machine
+from app.services.machine_status import refresh_machine_statuses
 
 
 @pytest.fixture(autouse=True)
@@ -73,3 +77,21 @@ def test_threshold_alert_is_created_and_resolved() -> None:
     assert active_alert["state"] == "active"
     assert active_alert["kind"] == "threshold"
     assert resolved_alert["state"] == "resolved"
+
+
+def test_machine_becomes_offline_when_heartbeat_expires() -> None:
+    credentials = {"email": "operator@example.com", "password": "strong-password"}
+    with TestClient(app) as client:
+        access_token = client.post("/auth/register", json=credentials).json()["access_token"]
+        enrollment = client.post("/machines", json={"name": "demo-node", "hostname": "demo-node.local"}, headers={"Authorization": f"Bearer {access_token}"}).json()
+        client.post("/agent/heartbeat", headers={"X-Machine-ID": enrollment["id"], "X-Agent-Token": enrollment["agent_token"]})
+        with SessionLocal() as session:
+            machine = session.get(Machine, enrollment["id"])
+            machine.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(seconds=61)
+            refresh_machine_statuses(session)
+            session.commit()
+        machines = client.get("/machines", headers={"Authorization": f"Bearer {access_token}"}).json()
+        alerts = client.get("/alerts", headers={"Authorization": f"Bearer {access_token}"}).json()
+
+    assert machines[0]["status"] == "offline"
+    assert alerts[0]["kind"] == "heartbeat"

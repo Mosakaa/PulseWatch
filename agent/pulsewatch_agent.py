@@ -33,9 +33,16 @@ def submit_snapshot(snapshot: dict[str, object]) -> None:
     response.raise_for_status()
 
 
+def send_heartbeat() -> None:
+    api_url = os.getenv("PULSEWATCH_API_URL", "http://localhost:8000").rstrip("/")
+    response = httpx.post(f"{api_url}/agent/heartbeat", headers={"X-Machine-ID": os.environ["PULSEWATCH_MACHINE_ID"], "X-Agent-Token": os.environ["PULSEWATCH_AGENT_TOKEN"]}, timeout=10)
+    response.raise_for_status()
+
+
 if __name__ == "__main__":
     interval_seconds = int(os.getenv("PULSEWATCH_INTERVAL_SECONDS", "30"))
     while True:
+        send_heartbeat()
         snapshot = collect_snapshot()
         submit_snapshot(snapshot)
         print(f"Submitted telemetry for {snapshot['hostname']}")

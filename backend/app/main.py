@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -5,21 +6,32 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from sqlalchemy import desc, select, text
 from sqlalchemy.orm import Session
 
-from .database import Base, engine, get_session
+from .database import Base, SessionLocal, engine, get_session
 from .models import Alert, AlertRule, Machine, Telemetry, User
 from .schemas import (AlertResponse, AlertRuleResponse, AlertRuleUpdate, AuthResponse,
                       Credentials, MachineCreate, MachineEnrollment, MachineResponse, TelemetryIn)
 from .security import create_access_token, decode_access_token, hash_password, new_agent_token, verify_password
 from .services.alert_engine import evaluate_threshold_rules
+from .services.machine_status import refresh_machine_statuses
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    watcher = asyncio.create_task(heartbeat_watcher())
     yield
+    watcher.cancel()
 
 
 app = FastAPI(title="PulseWatch API", version="0.3.0", lifespan=lifespan)
+
+
+async def heartbeat_watcher() -> None:
+    while True:
+        await asyncio.sleep(15)
+        with SessionLocal() as session:
+            refresh_machine_statuses(session)
+            session.commit()
 
 
 def require_user(authorization: str = Header(default=""), session: Session = Depends(get_session)) -> User:
@@ -30,6 +42,13 @@ def require_user(authorization: str = Header(default=""), session: Session = Dep
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists")
     return user
+
+
+def require_agent(x_machine_id: str, x_agent_token: str, session: Session) -> Machine:
+    machine = session.get(Machine, x_machine_id)
+    if machine is None or not x_agent_token or not verify_password(x_agent_token, machine.agent_token_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent credentials")
+    return machine
 
 
 @app.get("/health", tags=["system"])
@@ -81,19 +100,33 @@ def register_machine(payload: MachineCreate, user: User = Depends(require_user),
 @app.get("/machines", response_model=list[MachineResponse], tags=["machines"])
 def list_machines(user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[MachineResponse]:
     machines = session.scalars(select(Machine).where(Machine.owner_id == user.id).order_by(Machine.name)).all()
-    return [MachineResponse(id=machine.id, name=machine.name, hostname=machine.hostname, status="pending" if machine.last_heartbeat_at is None else "online", last_heartbeat_at=machine.last_heartbeat_at.isoformat() if machine.last_heartbeat_at else None) for machine in machines]
+    refresh_machine_statuses(session)
+    session.commit()
+    return [MachineResponse(id=machine.id, name=machine.name, hostname=machine.hostname, status=machine.status, last_heartbeat_at=machine.last_heartbeat_at.isoformat() if machine.last_heartbeat_at else None) for machine in machines]
 
 
 @app.post("/agent/telemetry", status_code=status.HTTP_202_ACCEPTED, tags=["agents"])
 def ingest_telemetry(payload: TelemetryIn, x_machine_id: str = Header(default=""), x_agent_token: str = Header(default=""), session: Session = Depends(get_session)) -> dict[str, str]:
-    machine = session.get(Machine, x_machine_id)
-    if machine is None or not x_agent_token or not verify_password(x_agent_token, machine.agent_token_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid agent credentials")
+    machine = require_agent(x_machine_id, x_agent_token, session)
     telemetry = Telemetry(machine_id=machine.id, **payload.model_dump())
     session.add(telemetry)
     machine.last_heartbeat_at = datetime.now(timezone.utc)
+    machine.status = "online"
     session.flush()
     evaluate_threshold_rules(session, machine, telemetry)
+    session.commit()
+    return {"status": "accepted"}
+
+
+@app.post("/agent/heartbeat", status_code=status.HTTP_202_ACCEPTED, tags=["agents"])
+def receive_heartbeat(x_machine_id: str = Header(default=""), x_agent_token: str = Header(default=""), session: Session = Depends(get_session)) -> dict[str, str]:
+    machine = require_agent(x_machine_id, x_agent_token, session)
+    machine.last_heartbeat_at = datetime.now(timezone.utc)
+    machine.status = "online"
+    active_alert = session.scalar(select(Alert).where(Alert.machine_id == machine.id, Alert.kind == "heartbeat", Alert.state == "active"))
+    if active_alert is not None:
+        active_alert.state = "resolved"
+        active_alert.resolved_at = datetime.now(timezone.utc)
     session.commit()
     return {"status": "accepted"}
 

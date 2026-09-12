@@ -29,6 +29,7 @@ class Machine(Base):
     name: Mapped[str] = mapped_column(String(100))
     hostname: Mapped[str] = mapped_column(String(255))
     agent_token_hash: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(20), default="pending")
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
