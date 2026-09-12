@@ -36,3 +36,31 @@ class TelemetryIn(BaseModel):
     network_bytes_sent: int = Field(ge=0, default=0)
     network_bytes_received: int = Field(ge=0, default=0)
     uptime_seconds: int = Field(ge=0)
+
+
+class AlertRuleUpdate(BaseModel):
+    threshold: float = Field(ge=0, le=100)
+    severity: str = Field(pattern="^(info|warning|critical)$")
+    enabled: bool
+
+
+class AlertRuleResponse(BaseModel):
+    id: int
+    machine_id: str
+    metric: str
+    threshold: float
+    severity: str
+    enabled: bool
+
+
+class AlertResponse(BaseModel):
+    id: int
+    machine_id: str
+    machine_name: str
+    kind: str
+    state: str
+    severity: str
+    message: str
+    value: float | None
+    created_at: str
+    resolved_at: str | None

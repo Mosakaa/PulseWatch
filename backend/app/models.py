@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -45,3 +45,29 @@ class Telemetry(Base):
     network_bytes_sent: Mapped[int] = mapped_column(Integer, default=0)
     network_bytes_received: Mapped[int] = mapped_column(Integer, default=0)
     uptime_seconds: Mapped[int] = mapped_column(Integer)
+
+
+class AlertRule(Base):
+    __tablename__ = "alert_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    machine_id: Mapped[str] = mapped_column(ForeignKey("machines.id"), index=True)
+    metric: Mapped[str] = mapped_column(String(50))
+    threshold: Mapped[float] = mapped_column(Float)
+    severity: Mapped[str] = mapped_column(String(20), default="warning")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Alert(Base):
+    __tablename__ = "alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    machine_id: Mapped[str] = mapped_column(ForeignKey("machines.id"), index=True)
+    rule_id: Mapped[int] = mapped_column(ForeignKey("alert_rules.id"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(50))
+    state: Mapped[str] = mapped_column(String(20), default="active")
+    severity: Mapped[str] = mapped_column(String(20))
+    message: Mapped[str] = mapped_column(String(500))
+    value: Mapped[float] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)

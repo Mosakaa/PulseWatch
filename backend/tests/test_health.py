@@ -56,3 +56,20 @@ def test_agent_can_submit_telemetry_for_an_enrolled_machine() -> None:
 
     assert response.status_code == 202
     assert history.json()[0]["cpu_percent"] == 42
+
+
+def test_threshold_alert_is_created_and_resolved() -> None:
+    credentials = {"email": "operator@example.com", "password": "strong-password"}
+    headers: dict[str, str]
+    with TestClient(app) as client:
+        access_token = client.post("/auth/register", json=credentials).json()["access_token"]
+        enrollment = client.post("/machines", json={"name": "demo-node", "hostname": "demo-node.local"}, headers={"Authorization": f"Bearer {access_token}"}).json()
+        headers = {"X-Machine-ID": enrollment["id"], "X-Agent-Token": enrollment["agent_token"]}
+        client.post("/agent/telemetry", json={"cpu_percent": 95, "memory_percent": 50, "disk_percent": 20, "uptime_seconds": 100}, headers=headers)
+        active_alert = client.get("/alerts", headers={"Authorization": f"Bearer {access_token}"}).json()[0]
+        client.post("/agent/telemetry", json={"cpu_percent": 30, "memory_percent": 50, "disk_percent": 20, "uptime_seconds": 101}, headers=headers)
+        resolved_alert = client.get("/alerts", headers={"Authorization": f"Bearer {access_token}"}).json()[0]
+
+    assert active_alert["state"] == "active"
+    assert active_alert["kind"] == "threshold"
+    assert resolved_alert["state"] == "resolved"
