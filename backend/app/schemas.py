@@ -63,4 +63,5 @@ class AlertResponse(BaseModel):
     message: str
     value: float | None
     created_at: str
+    acknowledged_at: str | None
     resolved_at: str | None

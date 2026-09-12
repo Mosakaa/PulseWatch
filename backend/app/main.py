@@ -200,4 +200,19 @@ def update_alert_rule(rule_id: int, payload: AlertRuleUpdate, user: User = Depen
 @app.get("/alerts", response_model=list[AlertResponse], tags=["alerts"])
 def list_alerts(user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[AlertResponse]:
     rows = session.execute(select(Alert, Machine.name).join(Machine).where(Machine.owner_id == user.id).order_by(desc(Alert.created_at)).limit(100)).all()
-    return [AlertResponse(id=alert.id, machine_id=alert.machine_id, machine_name=name, kind=alert.kind, state=alert.state, severity=alert.severity, message=alert.message, value=alert.value, created_at=alert.created_at.isoformat(), resolved_at=alert.resolved_at.isoformat() if alert.resolved_at else None) for alert, name in rows]
+    return [AlertResponse(id=alert.id, machine_id=alert.machine_id, machine_name=name, kind=alert.kind, state=alert.state, severity=alert.severity, message=alert.message, value=alert.value, created_at=alert.created_at.isoformat(), acknowledged_at=alert.acknowledged_at.isoformat() if alert.acknowledged_at else None, resolved_at=alert.resolved_at.isoformat() if alert.resolved_at else None) for alert, name in rows]
+
+
+@app.post("/alerts/{alert_id}/acknowledge", response_model=AlertResponse, tags=["alerts"])
+async def acknowledge_alert(alert_id: int, user: User = Depends(require_user), session: Session = Depends(get_session)) -> AlertResponse:
+    row = session.execute(select(Alert, Machine.name).join(Machine).where(Alert.id == alert_id, Machine.owner_id == user.id)).first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
+    alert, machine_name = row
+    if alert.state == "active":
+        alert.state = "acknowledged"
+        alert.acknowledged_at = datetime.now(timezone.utc)
+        alert.acknowledged_by_id = user.id
+        session.commit()
+        await manager.broadcast(user.id, {"type": "alert.acknowledged", "machine_id": alert.machine_id, "alert_id": alert.id})
+    return AlertResponse(id=alert.id, machine_id=alert.machine_id, machine_name=machine_name, kind=alert.kind, state=alert.state, severity=alert.severity, message=alert.message, value=alert.value, created_at=alert.created_at.isoformat(), acknowledged_at=alert.acknowledged_at.isoformat() if alert.acknowledged_at else None, resolved_at=alert.resolved_at.isoformat() if alert.resolved_at else None)

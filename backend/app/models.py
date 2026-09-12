@@ -71,4 +71,6 @@ class Alert(Base):
     message: Mapped[str] = mapped_column(String(500))
     value: Mapped[float] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=True)
     resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)

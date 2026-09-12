@@ -107,3 +107,18 @@ def test_dashboard_receives_telemetry_events_over_websocket() -> None:
             event = websocket.receive_json()
 
     assert event == {"type": "telemetry.received", "machine_id": enrollment["id"]}
+
+
+def test_user_can_acknowledge_an_active_alert() -> None:
+    credentials = {"email": "operator@example.com", "password": "strong-password"}
+    with TestClient(app) as client:
+        access_token = client.post("/auth/register", json=credentials).json()["access_token"]
+        authorization = {"Authorization": f"Bearer {access_token}"}
+        enrollment = client.post("/machines", json={"name": "demo-node", "hostname": "demo-node.local"}, headers=authorization).json()
+        client.post("/agent/telemetry", json={"cpu_percent": 95, "memory_percent": 50, "disk_percent": 20, "uptime_seconds": 100}, headers={"X-Machine-ID": enrollment["id"], "X-Agent-Token": enrollment["agent_token"]})
+        alert_id = client.get("/alerts", headers=authorization).json()[0]["id"]
+        acknowledged = client.post(f"/alerts/{alert_id}/acknowledge", headers=authorization)
+
+    assert acknowledged.status_code == 200
+    assert acknowledged.json()["state"] == "acknowledged"
+    assert acknowledged.json()["acknowledged_at"]

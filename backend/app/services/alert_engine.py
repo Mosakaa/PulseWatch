@@ -12,7 +12,7 @@ def evaluate_threshold_rules(session: Session, machine: Machine, telemetry: Tele
     rules = session.scalars(select(AlertRule).where(AlertRule.machine_id == machine.id, AlertRule.enabled.is_(True))).all()
     for rule in rules:
         value = getattr(telemetry, rule.metric)
-        active_alert = session.scalar(select(Alert).where(Alert.rule_id == rule.id, Alert.state == "active"))
+        active_alert = session.scalar(select(Alert).where(Alert.rule_id == rule.id, Alert.state.in_(("active", "acknowledged"))))
         if value >= rule.threshold and active_alert is None:
             alert = Alert(
                 machine_id=machine.id,
