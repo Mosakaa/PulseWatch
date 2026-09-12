@@ -8,6 +8,7 @@ type Machine = { id: string; name: string; hostname: string; status: "pending" |
 type Alert = { id: number; machine_id: string; machine_name: string; kind: string; state: string; severity: string; message: string; created_at: string };
 type Telemetry = { collected_at: string; cpu_percent: number; memory_percent: number; disk_percent: number };
 type AlertRule = { id: number; machine_id: string; metric: string; threshold: number; severity: "info" | "warning" | "critical"; enabled: boolean };
+type ServiceCheck = { id: number; machine_id: string; service_name: string; severity: "info" | "warning" | "critical"; enabled: boolean };
 
 async function request<T>(path: string, token?: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, { ...options, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options?.headers } });
@@ -44,11 +45,14 @@ function Dashboard({ token, email, onSignOut }: { token: string; email: string; 
   const [activeMachineId, setActiveMachineId] = useState("");
   const [telemetry, setTelemetry] = useState<Telemetry[]>([]);
   const [rules, setRules] = useState<AlertRule[]>([]);
+  const [serviceChecks, setServiceChecks] = useState<ServiceCheck[]>([]);
   const [error, setError] = useState("");
   const [live, setLive] = useState(false);
   const [enrollment, setEnrollment] = useState<{ id: string; agent_token: string } | null>(null);
   const [machineName, setMachineName] = useState("");
   const [hostname, setHostname] = useState("");
+  const [serviceName, setServiceName] = useState("");
+  const [serviceSeverity, setServiceSeverity] = useState<"info" | "warning" | "critical">("critical");
   const activeMachine = machines.find((machine) => machine.id === activeMachineId) ?? machines[0];
   const onlineCount = machines.filter((machine) => machine.status === "online").length;
   const activeAlerts = alerts.filter((alert) => alert.state === "active");
@@ -67,6 +71,7 @@ function Dashboard({ token, email, onSignOut }: { token: string; email: string; 
   }, [token]);
   useEffect(() => { if (!activeMachine?.id) { setTelemetry([]); return; } void request<Telemetry[]>(`/machines/${activeMachine.id}/telemetry`, token).then(setTelemetry).catch(() => setTelemetry([])); }, [activeMachine?.id, token, machines.length]);
   useEffect(() => { if (!activeMachine?.id) { setRules([]); return; } void request<AlertRule[]>(`/machines/${activeMachine.id}/rules`, token).then(setRules).catch(() => setRules([])); }, [activeMachine?.id, token]);
+  useEffect(() => { if (!activeMachine?.id) { setServiceChecks([]); return; } void request<ServiceCheck[]>(`/machines/${activeMachine.id}/services`, token).then(setServiceChecks).catch(() => setServiceChecks([])); }, [activeMachine?.id, token]);
   async function enrollMachine(event: FormEvent) {
     event.preventDefault();
     try { const result = await request<{ id: string; agent_token: string }>("/machines", token, { method: "POST", body: JSON.stringify({ name: machineName, hostname }) }); setEnrollment(result); setMachineName(""); setHostname(""); await refresh(); setActiveMachineId(result.id); }
@@ -84,6 +89,15 @@ function Dashboard({ token, email, onSignOut }: { token: string; email: string; 
       setRules((current) => current.map((candidate) => candidate.id === rule.id ? rule : candidate));
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to update alert rule"); }
   }
+  async function addServiceCheck(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeMachine) return;
+    try {
+      const check = await request<ServiceCheck>(`/machines/${activeMachine.id}/services`, token, { method: "POST", body: JSON.stringify({ service_name: serviceName, severity: serviceSeverity }) });
+      setServiceChecks((current) => [...current, check]);
+      setServiceName("");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to monitor service"); }
+  }
   return <main className="app-shell">
     <aside className="sidebar"><div><p className="eyebrow">Control room</p><h1>PulseWatch</h1></div><nav><a className="active" href="#overview">Overview</a><a href="#machines">Machines <span>{machines.length}</span></a><a href="#alerts">Alerts <span>{activeAlerts.length}</span></a></nav><div className="account"><span>{email}</span><button onClick={onSignOut}>Sign out</button></div></aside>
     <section className="workspace">
@@ -93,6 +107,7 @@ function Dashboard({ token, email, onSignOut }: { token: string; email: string; 
         <div className="machine-list"><div className="section-title"><h3>Machines</h3><span>{onlineCount} online</span></div>{machines.length === 0 ? <p className="empty">Enroll a machine to begin receiving telemetry.</p> : machines.map((machine) => <button key={machine.id} className={`machine-row ${activeMachine?.id === machine.id ? "selected" : ""}`} onClick={() => setActiveMachineId(machine.id)}><i className={`status ${machine.status}`} /><span><b>{machine.name}</b><small>{machine.hostname}</small></span><em>{machine.status}</em></button>)}</div>
         <div className="detail-panel"><div className="section-title"><div><h3>{activeMachine?.name ?? "No machine selected"}</h3><span>{activeMachine?.hostname}</span></div>{activeMachine && <span className={`status-label ${activeMachine.status}`}>{activeMachine.status}</span>}</div><div className="metric-grid">{[{ label: "CPU", metric: "cpu_percent" as const, color: "#157f72" }, { label: "Memory", metric: "memory_percent" as const, color: "#c25423" }, { label: "Disk", metric: "disk_percent" as const, color: "#4b61b8" }].map(({ label, metric, color }) => <article key={metric} className="metric"><div><span>{label}</span><b>{telemetry.length ? `${telemetry.at(-1)?.[metric].toFixed(1)}%` : "--"}</b></div><LineChart data={telemetry} metric={metric} color={color} /></article>)}</div>
           <section className="rule-panel"><div className="section-title"><h3>Alert rules</h3><span>{rules.length} configured</span></div>{rules.map((rule) => <form className="rule-row" key={rule.id} onSubmit={(event) => void updateRule(event, rule.id)}><b>{rule.metric.replace("_percent", "")}</b><label>Threshold<input name="threshold" type="number" min="0" max="100" defaultValue={rule.threshold} /></label><label>Severity<select name="severity" defaultValue={rule.severity}><option value="info">Info</option><option value="warning">Warning</option><option value="critical">Critical</option></select></label><label className="rule-toggle"><input name="enabled" type="checkbox" defaultChecked={rule.enabled} />Enabled</label><button>Save</button></form>)}</section>
+          <section className="service-panel"><div className="section-title"><h3>Service checks</h3><span>{serviceChecks.length} monitored</span></div>{serviceChecks.length > 0 && <div className="service-tags">{serviceChecks.map((check) => <span key={check.id}>{check.service_name}<small>{check.severity}</small></span>)}</div>}<form className="service-form" onSubmit={addServiceCheck}><input value={serviceName} onChange={(event) => setServiceName(event.target.value)} placeholder="nginx" pattern="[a-zA-Z0-9_.-]+" required /><select value={serviceSeverity} onChange={(event) => setServiceSeverity(event.target.value as "info" | "warning" | "critical")}><option value="info">Info</option><option value="warning">Warning</option><option value="critical">Critical</option></select><button>Monitor service</button></form></section>
           <p className="last-seen">{activeMachine?.last_heartbeat_at ? `Last heartbeat ${new Date(activeMachine.last_heartbeat_at).toLocaleString()}` : "No heartbeat received"}</p>
         </div>
       </section>
