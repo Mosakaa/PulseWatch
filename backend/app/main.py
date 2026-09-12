@@ -2,7 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import desc, select, text
 from sqlalchemy.orm import Session
@@ -14,6 +14,7 @@ from .schemas import (AlertResponse, AlertRuleResponse, AlertRuleUpdate, AuthRes
 from .security import create_access_token, decode_access_token, hash_password, new_agent_token, verify_password
 from .services.alert_engine import evaluate_threshold_rules
 from .services.machine_status import refresh_machine_statuses
+from .realtime import manager
 
 
 @asynccontextmanager
@@ -38,8 +39,13 @@ async def heartbeat_watcher() -> None:
     while True:
         await asyncio.sleep(15)
         with SessionLocal() as session:
-            refresh_machine_statuses(session)
+            alerts = refresh_machine_statuses(session)
+            session.flush()
             session.commit()
+            for alert in alerts:
+                machine = session.get(Machine, alert.machine_id)
+                if machine is not None:
+                    await manager.broadcast(machine.owner_id, {"type": "alert.created", "machine_id": machine.id, "alert_id": alert.id})
 
 
 def require_user(authorization: str = Header(default=""), session: Session = Depends(get_session)) -> User:
@@ -114,20 +120,24 @@ def list_machines(user: User = Depends(require_user), session: Session = Depends
 
 
 @app.post("/agent/telemetry", status_code=status.HTTP_202_ACCEPTED, tags=["agents"])
-def ingest_telemetry(payload: TelemetryIn, x_machine_id: str = Header(default=""), x_agent_token: str = Header(default=""), session: Session = Depends(get_session)) -> dict[str, str]:
+async def ingest_telemetry(payload: TelemetryIn, x_machine_id: str = Header(default=""), x_agent_token: str = Header(default=""), session: Session = Depends(get_session)) -> dict[str, str]:
     machine = require_agent(x_machine_id, x_agent_token, session)
     telemetry = Telemetry(machine_id=machine.id, **payload.model_dump())
     session.add(telemetry)
     machine.last_heartbeat_at = datetime.now(timezone.utc)
     machine.status = "online"
     session.flush()
-    evaluate_threshold_rules(session, machine, telemetry)
+    alerts = evaluate_threshold_rules(session, machine, telemetry)
+    session.flush()
     session.commit()
+    await manager.broadcast(machine.owner_id, {"type": "telemetry.received", "machine_id": machine.id})
+    for alert in alerts:
+        await manager.broadcast(machine.owner_id, {"type": "alert.created", "machine_id": machine.id, "alert_id": alert.id})
     return {"status": "accepted"}
 
 
 @app.post("/agent/heartbeat", status_code=status.HTTP_202_ACCEPTED, tags=["agents"])
-def receive_heartbeat(x_machine_id: str = Header(default=""), x_agent_token: str = Header(default=""), session: Session = Depends(get_session)) -> dict[str, str]:
+async def receive_heartbeat(x_machine_id: str = Header(default=""), x_agent_token: str = Header(default=""), session: Session = Depends(get_session)) -> dict[str, str]:
     machine = require_agent(x_machine_id, x_agent_token, session)
     machine.last_heartbeat_at = datetime.now(timezone.utc)
     machine.status = "online"
@@ -136,7 +146,23 @@ def receive_heartbeat(x_machine_id: str = Header(default=""), x_agent_token: str
         active_alert.state = "resolved"
         active_alert.resolved_at = datetime.now(timezone.utc)
     session.commit()
+    await manager.broadcast(machine.owner_id, {"type": "heartbeat.received", "machine_id": machine.id})
     return {"status": "accepted"}
+
+
+@app.websocket("/ws/events")
+async def dashboard_events(websocket: WebSocket, token: str = Query()):
+    try:
+        user_id = decode_access_token(token)
+    except HTTPException:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    await manager.connect(user_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(user_id, websocket)
 
 
 @app.get("/machines/{machine_id}/telemetry", tags=["telemetry"])

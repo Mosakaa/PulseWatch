@@ -95,3 +95,15 @@ def test_machine_becomes_offline_when_heartbeat_expires() -> None:
 
     assert machines[0]["status"] == "offline"
     assert alerts[0]["kind"] == "heartbeat"
+
+
+def test_dashboard_receives_telemetry_events_over_websocket() -> None:
+    credentials = {"email": "operator@example.com", "password": "strong-password"}
+    with TestClient(app) as client:
+        access_token = client.post("/auth/register", json=credentials).json()["access_token"]
+        enrollment = client.post("/machines", json={"name": "demo-node", "hostname": "demo-node.local"}, headers={"Authorization": f"Bearer {access_token}"}).json()
+        with client.websocket_connect(f"/ws/events?token={access_token}") as websocket:
+            client.post("/agent/telemetry", json={"cpu_percent": 42, "memory_percent": 50, "disk_percent": 20, "uptime_seconds": 100}, headers={"X-Machine-ID": enrollment["id"], "X-Agent-Token": enrollment["agent_token"]})
+            event = websocket.receive_json()
+
+    assert event == {"type": "telemetry.received", "machine_id": enrollment["id"]}
