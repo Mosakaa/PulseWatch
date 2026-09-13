@@ -55,6 +55,19 @@ alembic upgrade head
 
 Docker starts the API only after applying `alembic upgrade head`.
 
+## Failure demonstrations
+
+Run repeatable CPU and service-failure scenarios against a running API:
+
+```bash
+pip install -r demo/requirements.txt
+python demo/pulsewatch_demo.py --scenario all
+```
+
+The script enrolls a temporary machine, opens and resolves a CPU incident, then opens and resolves an `nginx` service incident. Watch the dashboard or Discord channel while it runs.
+
+To demonstrate a real service failure, configure `PULSEWATCH_SERVICES=nginx` for an enrolled agent, then stop and restart that service on the monitored host. To demonstrate outage detection, stop the agent process and wait 60 seconds for its heartbeat incident.
+
 To run the API without Docker:
 
 ```bash
