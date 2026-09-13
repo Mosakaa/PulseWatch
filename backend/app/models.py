@@ -66,6 +66,7 @@ class AlertRule(Base):
     machine_id: Mapped[str] = mapped_column(ForeignKey("machines.id"), index=True)
     metric: Mapped[str] = mapped_column(String(50))
     threshold: Mapped[float] = mapped_column(Float)
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
     severity: Mapped[str] = mapped_column(String(20), default="warning")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 

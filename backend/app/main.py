@@ -140,7 +140,7 @@ def register_machine(payload: MachineCreate, user: User = Depends(require_user),
     session.add(machine)
     session.flush()
     for metric in ("cpu_percent", "memory_percent", "disk_percent"):
-        session.add(AlertRule(machine_id=machine.id, metric=metric, threshold=90, severity="warning"))
+        session.add(AlertRule(machine_id=machine.id, metric=metric, threshold=90, duration_seconds=0, severity="warning"))
     session.commit()
     session.refresh(machine)
     return MachineEnrollment(id=machine.id, name=machine.name, hostname=machine.hostname, status="pending", last_heartbeat_at=None, agent_token=agent_token)
@@ -240,6 +240,7 @@ def update_alert_rule(rule_id: int, payload: AlertRuleUpdate, user: User = Depen
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert rule not found")
     require_owned_machine(rule.machine_id, user, session)
     rule.threshold = payload.threshold
+    rule.duration_seconds = payload.duration_seconds
     rule.severity = payload.severity
     rule.enabled = payload.enabled
     session.commit()
