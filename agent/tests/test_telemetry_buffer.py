@@ -1,6 +1,6 @@
 import httpx
 
-from pulsewatch_agent import TelemetryBuffer, flush_buffer
+from telemetry_buffer import TelemetryBuffer, flush_buffer
 
 
 def test_buffer_retries_failed_telemetry_in_order(tmp_path):
