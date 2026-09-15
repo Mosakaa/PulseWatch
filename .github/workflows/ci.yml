@@ -20,6 +20,19 @@ jobs:
       - run: alembic upgrade head
       - run: python -m pytest
 
+  agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements.txt pytest==8.3.4
+      - run: python -m pytest
+
   dashboard:
     runs-on: ubuntu-latest
     defaults:

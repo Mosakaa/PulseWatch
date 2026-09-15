@@ -68,6 +68,8 @@ The script enrolls a temporary machine, opens and resolves a CPU incident, then 
 
 To demonstrate a real service failure, configure `PULSEWATCH_SERVICES=nginx` for an enrolled agent, then stop and restart that service on the monitored host. To demonstrate outage detection, stop the agent process and wait 60 seconds for its heartbeat incident.
 
+The agent writes telemetry to a local SQLite buffer before it sends it. Stop the API or disconnect the monitored machine from the network, let a few collection intervals pass, then restore connectivity. The agent replays buffered samples in collection order. Set `PULSEWATCH_BUFFER_PATH` and `PULSEWATCH_BUFFER_MAX_ROWS` to choose the buffer location and maximum retained sample count.
+
 To run the API without Docker:
 
 ```bash
